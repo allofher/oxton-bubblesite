@@ -1,0 +1,18 @@
+// TODO: turn existing articles into markdown
+// TODO: generate article list??
+// TODO: embed glow? markdown reader? -> article state
+// TODO: extend model for 'current article' period question mark
+// TODO: finish styling
+// TODO: github
+// TODO: update home page bio (for reg website too)
+// TODO: your 'drafts' aren't drafts anymore
+// TODO: clean up environment stuff for 'release'
+// TODO: how to host online???
+// TODO: needs dynamic spacing of characters
+// TODO: needs more personal touch (eg. replace bg char)
+// TODO: Setup two columns, one with bio text and other with article list
+// TODO: swap status chit and time text, (align small chit right), load article text in white at top
+	// TODO: can we load the title of the current page instead of "status"?
+	// TODO: missing right side padding??
+		// TODO: generate help bubble
+		// TODO: Ensure set to loading for 'release'
