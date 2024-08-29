@@ -14,5 +14,9 @@
 // TODO: swap status chit and time text, (align small chit right), load article text in white at top
 	// TODO: can we load the title of the current page instead of "status"?
 	// TODO: missing right side padding??
+			// TODO: make funny
+		// TODO: Layer second switch statement for model status
+		// TODO: compose article list render here
 		// TODO: generate help bubble
+		// TODO: compose article render here
 		// TODO: Ensure set to loading for 'release'
