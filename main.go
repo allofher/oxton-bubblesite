@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	_ "embed"
+	"embed"
+	"io/fs"
 
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
@@ -41,7 +43,7 @@ const (
 )
 
 const (
-	LOADING = 1 + iota
+	LOADING = iota
 	ARTICLE
 	HOME
 )
@@ -50,24 +52,43 @@ type model struct {
 	currState      int
 	width          int
 	height         int
-	spinner        spinner.Model
 	time           time.Time
 	style          lipgloss.Style
 	loadProgress   float64
 	loadBar        progress.Model
+	articleList    list.Model
 }
 
-//go:embed homeStatic.txt
-var homeStatic string
+//go:embed homeBio.txt
+var homeBio string
 
+//go:embed articles
+var articlesFS embed.FS
+
+//custom messages for recurring 'thread'
 type timeMsg time.Time
 type tickMsg time.Time
+
+//list stuff
+type article struct {
+	title string
+	description string
+}
+func (a article) Title() string {
+	return a.title
+}
+func (a article) Description() string {
+	return a.description
+}
+func (a article) FilterValue() string {
+	return a.title
+}
 
 // lipgloss style definitions
 var (
 
 	// re-used font strengths
-	subtle    = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
+	subtleStyle   = lipgloss.AdaptiveColor{Light: "#D9DCCF", Dark: "#383838"}
 	// highlight = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}
 	// special   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}
 	
@@ -81,15 +102,22 @@ var (
 			BorderRight(true).
 			BorderBottom(true)
 	
-	// Home Content
+	// Home Bio
 	bioStyle = lipgloss.NewStyle().
 			Align(lipgloss.Center).
 			Foreground(lipgloss.Color("#FAFAFA")).
 			Margin(1, 3, 0, 0).
 			Padding(1, 2)
 
+	// Home List
+	listTitleStyle        = lipgloss.NewStyle().MarginLeft(2)
+	listItemStyle         = lipgloss.NewStyle().PaddingLeft(4)
+	listActiveItemStyle   = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
+	listPaginationStyle   = list.DefaultStyles().PaginationStyle.PaddingLeft(4)
+	listHelpStyle         = list.DefaultStyles().HelpStyle.PaddingLeft(4).PaddingBottom(1)
+
 	// Status Bar
-	statusNugget = lipgloss.NewStyle().
+	statusNuggetStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FFFDF5")).
 			Padding(0, 1)
 
@@ -104,7 +132,7 @@ var (
 			Padding(0, 1).
 			MarginRight(1)
 
-	statusText = lipgloss.NewStyle().Inherit(statusBarStyle)
+	statusTextStyle = lipgloss.NewStyle().Inherit(statusBarStyle)
 	
 	// Page.
 	docStyle = lipgloss.NewStyle().Padding(1, 2, 1, 2)
@@ -122,15 +150,30 @@ func composeLoadingBar(m *model) string {
 		lipgloss.Center, lipgloss.Center,
 		outlineBoxStyle.Render(loadingBar),
 		lipgloss.WithWhitespaceChars("猫咪"),
-		lipgloss.WithWhitespaceForeground(subtle),
+		lipgloss.WithWhitespaceForeground(subtleStyle),
 	)
 
 	return docStyle.Render(barWithOutline)
 }
 
+func composeArticle(m *model) string {
+	in := `# Hello World
+
+This is a simple example of Markdown rendering with Glamour!
+Check out the [other examples](https://github.com/charmbracelet/glamour/tree/master/examples) too.
+
+Bye!`
+	out, _ := glamour.Render(in, "dark")
+	return out
+}
+
 // TODO: Setup two columns, one with bio text and other with article list
 func composeHomePage(m *model) string {
-	return bioStyle.Width(m.width / 2).Render(homeStatic)
+	home := lipgloss.JoinHorizontal(lipgloss.Top,
+		bioStyle.Render(m.articleList.View()),
+		bioStyle.Width((m.width - 4) / 2).Render(homeBio))
+		
+	return docStyle.Render(home)
 }
 
 // TODO: swap status chit and time text, (align small chit right), load article text in white at top
@@ -139,7 +182,7 @@ func composeStatusBar(m *model) string {
 	
 	// TODO: can we load the title of the current page instead of "status"?
 	statusKey := statusStyle.Render("STATUS")
-	statusVal := statusText.
+	statusVal := statusTextStyle.
 		Width(m.width - w(statusKey)).
 		Render(m.time.Format(time.RFC1123))
 
@@ -165,8 +208,9 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
-		if m.loadProgress < 1.05 {
-			m.loadProgress += .35
+		if m.loadProgress < 1 {
+			//TODO: make funny
+			m.loadProgress += .33
 			return m, loadCmd()
 		} else {
 			m.currState = HOME
@@ -184,18 +228,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		default:
-			return m, nil
+			var cmd tea.Cmd
+			m.articleList, cmd = m.articleList.Update(msg)
+			return m, cmd
 		}
 	default:
 		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
+		m.articleList, cmd = m.articleList.Update(msg)
 		return m, cmd
 	}
 }
 
 func (m model) View() string {
 	printout := strings.Builder{}
-
+	
 	switch m.currState {
 	case LOADING:
 		printout.WriteString(composeLoadingBar(&m))
@@ -203,10 +249,15 @@ func (m model) View() string {
 	case HOME:
 		printout.WriteString(composeStatusBar(&m))
 		printout.WriteString(composeHomePage(&m))
+		// TODO: compose article list render here
 		// TODO: generate help bubble
 		return docStyle.Render(printout.String())
+	case ARTICLE:
+		// TODO: compose article render here
+		return docStyle.Render(composeArticle(&m))
 	}
 
+	log.Fatal("State OOB", "State", m.currState)
 	return ""
 }
 
@@ -230,21 +281,39 @@ func customMiddleware() wish.Middleware {
 		}
 		renderer := bubbletea.MakeRenderer(session)
 
-		spin := spinner.New()
-		spin.Spinner = spinner.Dot
-		spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 		loadingbar := progress.New(progress.WithScaledGradient("#FF7CCB", "#FDFF8C"))
 
+		var foundArticles []list.Item
+		fs.WalkDir(articlesFS, ".", func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				log.Fatal(err)
+			}
+			if strings.Contains(path, ".txt") {
+				foundArticles = append(foundArticles, article{title: path, description: ""})
+			}
+			return nil
+		})
+
+		articleList := list.New([]list.Item{}, list.NewDefaultDelegate(), (putty.Window.Width / 2), (putty.Window.Height / 2))
+		articleList.SetItems(foundArticles)
+		articleList.Title = "Writing"
+		articleList.SetShowStatusBar(false)
+		articleList.SetFilteringEnabled(false)
+		articleList.Styles.Title = listTitleStyle
+		articleList.Styles.PaginationStyle = listPaginationStyle
+		articleList.Styles.HelpStyle = listHelpStyle
+		articleList.SetShowHelp(false)
+		
 		// TODO: Ensure set to loading for 'release'
 		m := model{
 			currState: HOME,
 			width: putty.Window.Width,
 			height: putty.Window.Height,
-			spinner: spin,
 			time:   time.Now(),
 			style:  renderer.NewStyle().Foreground(lipgloss.Color("#A8CC8C")),
 			loadProgress: 0.0,
 			loadBar: loadingbar,
+			articleList: articleList,
 		}
 		return newProgram(m, append(bubbletea.MakeOptions(session), tea.WithAltScreen())...)
 	}
