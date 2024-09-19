@@ -27,7 +27,6 @@ import (
 )
 
 // TODO: turn existing articles into markdown
-// TOOD: "refactor" to separate files out
 // TODO: finish styling
 // TODO: github
 // TODO: update home page bio (for reg website too)
@@ -72,7 +71,6 @@ type tickMsg time.Time
 type contentRenderedMsg string
 type errMsg struct { err error }
 
-//list stuff
 type article struct {
 	title string
 	path string
@@ -85,7 +83,6 @@ func (a article) Body() string { return a.body }
 func (a article) Description() string { return a.description }
 func (a article) FilterValue() string { return a.path }
 
-// lipgloss style definitions
 var (
 
 	// re-used font strengths
@@ -119,6 +116,13 @@ var (
 			BorderLeft(true).
 			BorderRight(true).
 			BorderBottom(true)
+
+	// Article Markdown Style
+	articleTextStyle = lipgloss.NewStyle().
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("#FAFAFA")).
+			Margin(1, 3, 0, 0).
+			Padding(1, 2)
 	
 	// Home List
 	listTitleStyle        = lipgloss.NewStyle().MarginLeft(2)
@@ -208,15 +212,10 @@ func (m model) setViewportSize(width, height int) {
 	m.articleViewport.Height = height - statusBarHeight - helpBarHeight
 }
 
-func (m model) setContent(content string) {
-	m.articleViewport.SetContent(content)
-}
-
 func glamourRender(m model, markdown string) (string, error) {
-	width := m.articleViewport.Width
-
 	options := []glamour.TermRendererOption{
-		glamour.WithWordWrap(width),
+		glamour.WithStandardStyle("dark"),
+		glamour.WithWordWrap(m.articleViewport.Width),
 	}
 
 	r, err := glamour.NewTermRenderer(options...)
@@ -229,7 +228,6 @@ func glamourRender(m model, markdown string) (string, error) {
 		return "", err
 	}
 
-	// trim lines
 	lines := strings.Split(out, "\n")
 
 	var content strings.Builder
@@ -242,14 +240,14 @@ func glamourRender(m model, markdown string) (string, error) {
 	return content.String(), nil
 }
 
-func renderWithGlamour(m model, md string) tea.Cmd {
+func renderWithGlamour(m model, currentArticle string) tea.Cmd {
 	return func() tea.Msg {
-		s, err := glamourRender(m, md)
+		articleText, err := glamourRender(m, currentArticle)
 		if err != nil {
 			log.Error("error rendering with Glamour", "error", err)
 			return errMsg{err}
 		}
-		return contentRenderedMsg(s)
+		return contentRenderedMsg(articleText)
 	}
 }
 
@@ -260,6 +258,16 @@ func loadCmd() tea.Cmd {
 }
 
 func loadArticle(m *model) article {
+
+	if m.articleList.SelectedItem().FilterValue() == "articles/manual test.md" {
+		return article{
+				title: "manual test",
+				path: "articles/manual test.md",
+				body: "hello?",
+				description: "",
+			}
+	}
+	
 	path := m.articleList.SelectedItem().FilterValue()
 	if path == "" {
 		log.Fatal("Missing Data", "Load Article, No Path", path)	
@@ -270,12 +278,14 @@ func loadArticle(m *model) article {
 		log.Fatal("Loaded Error", "Read File Got", err, "From Path", path)
 	}
 
-	return article{
+	activeArticle := article{
 		title: path[9:len(path)-3],
 		path: path,
 		body: string(data),
 		description: "",
 	}
+
+	return activeArticle
 }
 
 func (m model) unload() {
@@ -310,52 +320,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.width = (msg.Width - 3)
 			return m, nil
 		case tea.KeyMsg:
-			log.Info("User is mad?", "While Loading Pressed", msg)
+			log.Info("User input?", "While Loading Pressed", msg)
 			return m, nil
 		case contentRenderedMsg:
 			log.Warn("Unexpected Msg", "While Loading Recieved", msg)
 			return m, nil
 		}
-
 	case HOME:
 		switch msg := msg.(type) {
 		case tickMsg:
 			log.Warn("Unexpected Msg", "While Home Received", msg)
-			return m, nil
 		case timeMsg:
 			m.time = time.Time(msg)
-			return m, nil
 		case tea.WindowSizeMsg:
 			m.height = msg.Height
 			m.width = (msg.Width - 3)
-			m.setViewportSize((msg.Height - 4), (msg.Width - 4))
-			return m, nil
+			m.setViewportSize(msg.Height, msg.Width)
 		case tea.KeyMsg:
 			// TODO: keymap instead?
 			switch msg.String() {
 			case "q", "ctrl+c":
 				return m, tea.Quit
 			case "enter":
+				m.articleViewport = viewport.New(m.width, (m.height - 4))
+				m.articleViewport.YPosition = lipgloss.Height(composeStatusBar(&m))
+				m.articleViewport.Style = articleViewportStyle
+				m.articleViewport.HighPerformanceRendering = false
 				m.currentArticle = loadArticle(&m)
 				m.currentState = ARTICLE
 				return m, renderWithGlamour(m, m.currentArticle.Body())
 			default:
 				m.articleList, cmd = m.articleList.Update(msg)
-				return m, cmd
 			}	
 		case contentRenderedMsg:
 			log.Warn("Unexpected Msg", "While Home Recieved", msg)
-			return m, nil
 		}
-		
+		return m, cmd
 	case ARTICLE:
+		var cmds []tea.Cmd
+		
 		switch msg := msg.(type) {
 		case tickMsg:
 			log.Warn("Unexpected Msg", "While Article Received", msg)
-			return m, nil
+			m.articleViewport, cmd = m.articleViewport.Update(msg)
+			cmds = append(cmds, cmd)
 		case timeMsg:
 			m.time = time.Time(msg)
-			return m, nil
+			m.articleViewport, cmd = m.articleViewport.Update(msg)
+			cmds = append(cmds, cmd)
 		case tea.WindowSizeMsg:
 			m.height = msg.Height
 			m.width = (msg.Width - 3)
@@ -370,14 +382,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			default:
 				m.articleViewport, cmd = m.articleViewport.Update(msg)
-				return m, cmd
+				cmds = append(cmds, cmd)
 			}	
 		case contentRenderedMsg:
-			m.setContent(string(msg))
+			m.articleViewport.SetContent(string(msg))
+			log.Info("Visible Lines,", "Count:", m.articleViewport.VisibleLineCount())
+			log.Info("setcontent", "from", string(msg))
 			m.articleViewport, cmd = m.articleViewport.Update(msg)
-			return m, cmd
-			
+			cmds = append(cmds, cmd)
 		}
+		return m, tea.Batch(cmds...)
 	default:
 		log.Fatal("Update: State OOB", "State", m.currentState)
 		return m, tea.Quit
@@ -428,11 +442,18 @@ func customMiddleware() wish.Middleware {
 			wish.Fatalln(session, "no active terminal, skipping")
 			return nil
 		}
-		renderer := bubbletea.MakeRenderer(session)
 
+		renderer := bubbletea.MakeRenderer(session)
 		loadingbar := progress.New(progress.WithScaledGradient("#FF7CCB", "#FDFF8C"))
 
 		var foundArticles []list.Item
+		foundArticles = append(foundArticles,
+			article{
+				title: "manual test",
+				path: "articles/manual test.md",
+				body: "hello?",
+				description: "",
+			})
 		fs.WalkDir(articlesFS, ".", func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				log.Fatal(err)
@@ -448,10 +469,6 @@ func customMiddleware() wish.Middleware {
 			}
 			return nil
 		})
-
-		ourviewport := viewport.New((putty.Window.Width - 4), (putty.Window.Height - 4))
-		ourviewport.YPosition = 0
-		ourviewport.Style = articleViewportStyle
 		
 		articleList := list.New([]list.Item{},
 			list.NewDefaultDelegate(),
@@ -464,9 +481,7 @@ func customMiddleware() wish.Middleware {
 		articleList.Styles.Title = listTitleStyle
 		articleList.Styles.PaginationStyle = listPaginationStyle
 		articleList.Styles.HelpStyle = listHelpStyle
-		articleList.SetShowHelp(false)
-
-		var emptyDoc article
+		articleList.SetShowHelp(false) 
 		
 		// TODO: Ensure set to loading for 'release'
 		// TODO: Set initial state with command line flag/arg?
@@ -480,8 +495,6 @@ func customMiddleware() wish.Middleware {
 			loadProgress: 0.0,
 			loadBar: loadingbar,
 			articleList: articleList,
-			articleViewport: ourviewport,
-			currentArticle: emptyDoc,
 		}
 		return newProgram(m, append(bubbletea.MakeOptions(session), tea.WithAltScreen())...)
 	}
